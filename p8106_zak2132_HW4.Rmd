@@ -31,9 +31,14 @@ library(rpart.plot)
 library(party)
 library(partykit)
 library(pROC)
+library(randomForest)
+library(ranger)
+library(gbm)
 
 # Set global options for embedding plots and choosing themes
-knitr::opts_chunk$set(warning = FALSE, message = FALSE, fig.align = "center", cache = TRUE)
+knitr::opts_chunk$set(warning = FALSE, message = FALSE, 
+                      fig.align = "center", cache = TRUE, 
+                      fig.width = 6, fig.asp = 0.6, out.width = "90%")
 
 theme_set(theme_minimal() + theme(legend.position = "bottom"))
 
@@ -68,19 +73,11 @@ indexTrain = createDataPartition(y = data$outstate,
 training_df = data[indexTrain, ]
 
 testing_df = data[-indexTrain, ]
-
-# Create matrices for future analysis
-
-# Training data
-x_train = model.matrix(outstate~.,training_df)[, -1]
-y_train = training_df$outstate
-
-# Testing data
-x_test <- model.matrix(outstate~.,testing_df)[, -1]
-y_test <- testing_df$outstate
 ```
 
 ## Part (a): Regression Tree
+
+Here, we build two regression trees: one based on the cp value that minimizes MSE, and one based on the 1SE rule. Below, we include one visualization of each tree. The tree based on the minimum MSE rule is much more complex than the one based on the 1SE rule, which only has 7 splits (8 terminal nodes). On average, the predictions between both models when applied to test data are quite close, differing by no more than a few percent.
 
 ### Minimum MSE Rule
 
@@ -97,25 +94,31 @@ plotcp(regression_tree)
 
 # Cost-complexity pruning
 minimum_MSE = which.min(regression_cptable[,4])
-final_regression_tree = prune(regression_tree, cp = regression_cptable[minimum_MSE,1])
-
-# Plot of final tree
-rpart.plot(final_regression_tree) 
-plot(as.party(final_regression_tree))
+final_regression_tree = prune(regression_tree, 
+                              cp = regression_cptable[minimum_MSE,1])
 
 # Summary of final tree
 # summary(final_regression_tree) 
+```
+
+```{r}
+# Plot of final tree
+# plot(as.party(final_regression_tree))
+rpart.plot(final_regression_tree) 
 ```
 
 ### 1SE Rule
 
 ```{r}
 # Alternatively, cost-complexity pruning using 1SE rule
-final_regression_tree_1SE = prune(regression_tree, cp = regression_cptable[regression_cptable[,4]<regression_cptable[minimum_MSE,4]+regression_cptable[minimum_MSE,5],1][1])
+final_regression_tree_1SE = prune(regression_tree, 
+    cp = regression_cptable[regression_cptable[,4]<regression_cptable[minimum_MSE,4]+regression_cptable[minimum_MSE,5],1][1])
+```
 
+```{r}
 # Plot of 1SE tree
+# plot(as.party(final_regression_tree_1SE))
 rpart.plot(final_regression_tree_1SE)
-plot(as.party(final_regression_tree_1SE))
 ```
 
 ### Comparison of Predictions
@@ -137,11 +140,128 @@ cbind(reg_predict, oneSE_predict) %>%
 
 ## Part (b): Random Forest
 
-TBD
+We then use random forest modeling on the training data to predict `outstate` using two packages (methods): `randomForest` and `caret`. Both give similar variable importance and test error. `randomForest` tells us that the most important variable by far is `expend`, followed far behind by `terminal` and `room_board`. `caret` tells us that using the permutation method, i.e. computing importance based on permutations on out-of-bag data, the most important variables are...[TKTK]
+
+`randomForest` gives us an RMSE of 2029.739 when the model is applied to testing data, whereas `caret`'s RMSE when applied to testing data is...[TKTK].
+
+### `randomForest` Implementation
+
+```{r}
+# First method
+set.seed(2132)
+random_forest_college = randomForest(formula = outstate ~ .,
+                                     data = training_df)
+```
+
+```{r}
+# Variable importance (in order of increasing importance)
+random_forest_college$importance %>% as.data.frame() %>% arrange(IncNodePurity)
+```
+
+```{r}
+# Report test error for randomForest
+rf_college_preds = predict(random_forest_college, newdata = testing_df)
+RMSE(rf_college_preds, testing_df$outstate)
+```
+
+
+### `caret` Implementation of `ranger`
+
+```{r}
+# Second method
+set.seed(2132)
+rf_grid = expand.grid(mtry = 1:8,
+                      splitrule = "variance",
+                      min.node.size = 1:30)
+
+ctrl = trainControl(method = "repeatedcv", number = 10, repeats = 5)
+
+rf_college_fit = train(outstate ~ .,
+                       data = training_df,
+                       method = "ranger",
+                       tuneGrid = rf_grid,
+                       trControl = ctrl,
+                       importance = "permutation",
+                       scale.permutation.importance = TRUE)
+```
+
+```{r}
+# Report variable importance
+barplot(sort(ranger::importance(rf_college_fit$finalModel), decreasing = FALSE), 
+        las = 2, horiz = TRUE, cex.names = 0.7, 
+        col = colorRampPalette(colors = c("cyan", "blue"))(19))
+```
+
+```{r}
+# Report test error for caret
+rf_college_preds_caret = predict(rf_college_fit, newdata = testing_df)
+RMSE(rf_college_preds_caret, testing_df$outstate)
+```
 
 ## Part (c): Boosting
 
-TBD
+Again, we use two methods to build gradient boosting models on the training data that predict `outstate`: `gbm` alone, and `gbm` within `caret`. Once more, they both give similar variable importance and test error. `gbm` alone tells us that the most important variable is, once again, `expend` by a long shot, then followed by `room_board` and `apps`. `caret`'s implementation of `gbm` tells us that using the permutation method, i.e. computing importance based on permutations on out-of-bag data, the most important variables are...[TKTK]
+
+`gbm` alone gives us an RMSE of 1903.853 when the model is applied to testing data, whereas `caret`'s RMSE when applied to testing data is...[TKTK].
+
+### `gbm` Alone
+
+```{r}
+set.seed(2132)
+
+# Method 1
+college_boost_model = gbm(outstate ~ .,
+                          data = training_df,
+                          distribution = "gaussian",
+                          n.trees = 5000,
+                          interaction.depth = 3,
+                          shrinkage = 0.005,
+                          cv.folds = 10)
+```
+
+```{r}
+# Variable importance
+# Method 1
+summary(college_boost_model, las = 2, cBars = 19, cex.names = 0.6)
+```
+
+```{r}
+# Test error
+# 1st model
+boost_college_preds_gbm = predict(college_boost_model, newdata = testing_df)
+RMSE(boost_college_preds_gbm, testing_df$outstate)
+```
+
+### `gbm` with `caret
+
+```{r}
+# Method 2
+set.seed(2132)
+
+boost_grid = expand.grid(n.trees = seq(1, 5500, 500),
+                         interaction.depth = 2:10,
+                         shrinkage = c(0.001, 0.003, 0.005),
+                         n.minobsinnode = 1)
+
+college_boost_caret = train(outstate ~ .,
+                            data = training_df,
+                            method = "gbm",
+                            tuneGrid = boost_grid,
+                            trControl = ctrl,
+                            verbose = FALSE)
+```
+
+```{r}
+# Report the variable importance
+# Method 2
+summary(college_boost_caret$finalModel, las = 2, cBars = 19, cex.names = 0.6)
+```
+
+```{r}
+# Report the test error
+boost_college_preds = predict(college_boost_caret, newdata = testing_df)
+RMSE(boost_college_preds, testing_df$outstate)
+```
 
 # Question 2
 
@@ -172,7 +292,11 @@ OJ_testing_df = OJ_data[-OJ_indexTrain, ]
 
 ## Part (a): Classification Tree
 
+Using `rpart`, we can build a classification tree on the OJ training data to predict `purchase` class. As with the regression tree, we can do so using either the model that minimizes cross-validation error or based on the 1SE rule; here, we do both for completeness. 
+
 ### Minimum MSE Rule
+
+The tree that minimizes cross-validation error has 8 splits, leading to 9 terminal nodes (i.e. size 9). 
 
 ```{r}
 # Build classification tree using training data
@@ -185,23 +309,98 @@ class_tree = rpart(formula = purchase ~ . ,
 # Obtain cp table and plot vs cross-validation error
 OJ_cp_table = printcp(class_tree)
 plotcp(class_tree)
+```
 
+The final tree appears as follows: 
+
+```{r}
 # Obtain and plot final tree using min MSE rule
 OJ_min_MSE = which.min(OJ_cp_table[,4])
 final_class_tree = prune(class_tree, cp = OJ_cp_table[OJ_min_MSE,1])
 rpart.plot(final_class_tree)
-plot(as.party(final_class_tree))
+# plot(as.party(final_class_tree))
 ```
 
 ### 1SE Rule
 
+Based on the 1SE rule, the final tree has only one split, which is based on the `loyal_ch` predictor, and two terminal nodes (size 2). This is quite a bit simpler and smaller than the tree that minimized cross-validation error, but is also significantly easier to interpret.
+
 ```{r}
 # Obtain and plot final tree using 1SE rule
-final_class_tree_1SE = prune(class_tree, cp = OJ_cp_table[OJ_cp_table[,4]<OJ_cp_table[OJ_min_MSE,4]+OJ_cp_table[OJ_min_MSE,5],1][1])
+final_class_tree_1SE = prune(class_tree, 
+      cp = OJ_cp_table[OJ_cp_table[,4]<OJ_cp_table[OJ_min_MSE,4]+OJ_cp_table[OJ_min_MSE,5],1][1])
 
 # Plot of 1SE tree
 rpart.plot(final_class_tree_1SE)
-plot(as.party(final_class_tree_1SE))
+# plot(as.party(final_class_tree_1SE))
 ```
 
 ## Part (b): Boosting
+
+As in the regression case, we use `gbm` alone and also its implementation in `caret` for classification of our `purchase` outcome variable. The most important variables from the `gbm` model (without `caret`) are `loyal_ch`, and then in distant 2nd and 3rd places, `price_diff` followed by `week_of_purchase`. Similarly, the implementation in `caret` produces...[TKTK].
+
+For simplicity, we focus here on the test error rate from the `caret` model, which we observe to be...[TKTK]. 
+
+### `gbm` Alone
+
+```{r}
+# Method 1
+
+set.seed(2132)
+
+OJ_boost_model = gbm(purchase ~ .,
+                          data = OJ_training_df,
+                          distribution = "gaussian",
+                          n.trees = 5000,
+                          interaction.depth = 3,
+                          shrinkage = 0.005,
+                          cv.folds = 10)
+```
+
+```{r}
+# Report variable importance
+# Method 2
+summary(OJ_boost_model, las = 2, cBars = 19, cex.names = 0.6)
+```
+
+```{r}
+# WORK ON THIS
+# predict(OJ_boost_model, newdata = OJ_testing_df)
+```
+
+### `gbm` with `caret`
+
+```{r}
+set.seed(2132)
+
+# Method 2
+boost_grid_OJ = expand.grid(n.trees = seq(1, 5000, 500),
+                         interaction.depth = 2:10,
+                         shrinkage = c(0.001, 0.003, 0.005),
+                         n.minobsinnode = 1)
+
+ctrl_OJ = trainControl(method = "repeatedcv", number = 10, repeats = 5)
+
+OJ_boost_caret = train(purchase ~ .,
+                        data = OJ_training_df,
+                        method = "gbm",
+                        tuneGrid = boost_grid_OJ,
+                        trControl = ctrl_OJ,
+                        distribution = "adaboost",
+                        verbose = FALSE)
+```
+
+```{r}
+# Variable importance
+# Method 2
+summary(OJ_boost_caret$finalModel, las = 2, cBars = 19, cex.names = 0.6)
+```
+
+```{r}
+# Test error rate
+# Method 2 only for now
+boost_OJ_preds = predict(OJ_boost_caret, newdata = OJ_testing_df)
+error_rate = mean(boost_OJ_preds != OJ_testing_df$purchase)*100
+error_rate
+```
+
