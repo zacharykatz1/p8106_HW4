@@ -1,0 +1,75 @@
+---
+title: "P8106: Data Science II, Homework #4"
+author: 'Zachary Katz (UNI: zak2132)'
+date: "4/13/2022"
+output: 
+  pdf_document:
+    latex_engine: xelatex
+    toc: yes
+    toc_depth: 3
+  header-includes:
+    -\usepackage{fancyhdr}
+    -\usepackage{lipsum}
+    -\pagestyle{fancy}
+    -\fancyhead[R]{\thepage}
+    -\fancypagestyle{plain}{\pagestyle{fancy}}
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+
+library(tidyverse)
+library(viridis)
+library(caret)
+library(GGally)
+library(gridExtra)
+
+# Set global options for embedding plots and choosing themes
+knitr::opts_chunk$set(warning = FALSE, message = FALSE, fig.align = "center", cache = TRUE)
+
+theme_set(theme_minimal() + theme(legend.position = "bottom"))
+
+options(
+  ggplot2.continuous.colour = "viridis",
+  ggplot2.continuous.fill = "viridis"
+)
+
+scale_colour_discrete = scale_colour_viridis_d
+scale_fill_discrete = scale_fill_viridis_d
+```
+
+## Set-Up and Data Preprocessing
+
+```{r}
+set.seed(2132)
+
+# Load data, clean column names, eliminate rows containing NA entries
+data = read_csv("./Data/College.csv") %>% 
+  janitor::clean_names() %>% 
+  na.omit() %>% 
+  relocate("outstate", .after = "grad_rate") %>% 
+  select(-college)
+
+# Partition data into training/test sets
+indexTrain = createDataPartition(y = data$outstate,
+                                 p = 0.8,
+                                 list = FALSE)
+
+training_df = data[indexTrain, ]
+
+testing_df = data[-indexTrain, ]
+
+# Create matrices for future analysis
+
+# Training data
+x_train = model.matrix(outstate~.,training_df)[, -1]
+y_train = training_df$outstate
+
+# Testing data
+x_test <- model.matrix(outstate~.,testing_df)[, -1]
+y_test <- testing_df$outstate
+```
+
+## Part (a): Regression Tree
+
+TBD
