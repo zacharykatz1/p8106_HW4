@@ -23,6 +23,14 @@ library(viridis)
 library(caret)
 library(GGally)
 library(gridExtra)
+library(ISLR)
+library(mlbench)
+library(caret)
+library(rpart)
+library(rpart.plot)
+library(party)
+library(partykit)
+library(pROC)
 
 # Set global options for embedding plots and choosing themes
 knitr::opts_chunk$set(warning = FALSE, message = FALSE, fig.align = "center", cache = TRUE)
@@ -37,6 +45,8 @@ options(
 scale_colour_discrete = scale_colour_viridis_d
 scale_fill_discrete = scale_fill_viridis_d
 ```
+
+# Question 1
 
 ## Set-Up and Data Preprocessing
 
@@ -72,4 +82,126 @@ y_test <- testing_df$outstate
 
 ## Part (a): Regression Tree
 
+### Minimum MSE Rule
+
+```{r}
+# Build a regression tree on the training data to predict the response
+set.seed(2132)
+
+regression_tree = rpart(formula = outstate ~ . , 
+               data = training_df, control = rpart.control(cp = 0)) 
+
+# Cross-validation plot
+regression_cptable = regression_tree$cptable
+plotcp(regression_tree)
+
+# Cost-complexity pruning
+minimum_MSE = which.min(regression_cptable[,4])
+final_regression_tree = prune(regression_tree, cp = regression_cptable[minimum_MSE,1])
+
+# Plot of final tree
+rpart.plot(final_regression_tree) 
+plot(as.party(final_regression_tree))
+
+# Summary of final tree
+# summary(final_regression_tree) 
+```
+
+### 1SE Rule
+
+```{r}
+# Alternatively, cost-complexity pruning using 1SE rule
+final_regression_tree_1SE = prune(regression_tree, cp = regression_cptable[regression_cptable[,4]<regression_cptable[minimum_MSE,4]+regression_cptable[minimum_MSE,5],1][1])
+
+# Plot of 1SE tree
+rpart.plot(final_regression_tree_1SE)
+plot(as.party(final_regression_tree_1SE))
+```
+
+### Comparison of Predictions
+
+```{r}
+# For fun, compare predictions on first few observations in testing data set
+reg_predict = predict(final_regression_tree, newdata = testing_df)
+oneSE_predict = predict(final_regression_tree_1SE, newdata = testing_df)
+
+# Compare predictions in data table
+cbind(reg_predict, oneSE_predict) %>% 
+  as.data.frame() %>% 
+  head() %>% 
+  mutate(
+    perc_diff = abs((reg_predict - oneSE_predict) * 100 / oneSE_predict)
+  ) %>% 
+  knitr::kable(col.names = c("Prediction: Min MSE", "Prediction: 1SE", "Perc Diff"))
+```
+
+## Part (b): Random Forest
+
 TBD
+
+## Part (c): Boosting
+
+TBD
+
+# Question 2
+
+## Set-Up and Data Preprocessing
+
+```{r}
+set.seed(2132)
+
+# Load data, clean column names, eliminate rows containing NA entries, factor outcome
+data(OJ)
+OJ_data = OJ %>% 
+  janitor::clean_names() %>% 
+  na.omit() %>% 
+  relocate("purchase", .after = "store") %>% 
+  mutate(
+    purchase = as.factor(purchase)
+  )
+
+# Partition data into training/test sets (700 obs in training data)
+OJ_indexTrain = createDataPartition(y = OJ_data$purchase,
+                                 p = 0.653,
+                                 list = FALSE)
+
+OJ_training_df = OJ_data[OJ_indexTrain, ]
+
+OJ_testing_df = OJ_data[-OJ_indexTrain, ]
+```
+
+## Part (a): Classification Tree
+
+### Minimum MSE Rule
+
+```{r}
+# Build classification tree using training data
+set.seed(2132)
+
+class_tree = rpart(formula = purchase ~ . , 
+               data = OJ_training_df,
+               control = rpart.control(cp = 0))
+
+# Obtain cp table and plot vs cross-validation error
+OJ_cp_table = printcp(class_tree)
+plotcp(class_tree)
+
+# Obtain and plot final tree using min MSE rule
+OJ_min_MSE = which.min(OJ_cp_table[,4])
+final_class_tree = prune(class_tree, cp = OJ_cp_table[OJ_min_MSE,1])
+rpart.plot(final_class_tree)
+plot(as.party(final_class_tree))
+```
+
+### 1SE Rule
+
+```{r}
+# Obtain and plot final tree using 1SE rule
+final_class_tree_1SE = prune(class_tree, cp = OJ_cp_table[OJ_cp_table[,4]<OJ_cp_table[OJ_min_MSE,4]+OJ_cp_table[OJ_min_MSE,5],1][1])
+
+# Plot of 1SE tree
+rpart.plot(final_class_tree_1SE)
+plot(as.party(final_class_tree_1SE))
+```
+
+## Part (b): Boosting
