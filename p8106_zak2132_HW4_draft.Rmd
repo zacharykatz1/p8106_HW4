@@ -337,7 +337,7 @@ rpart.plot(final_class_tree_1SE)
 
 ## Part (b): Boosting
 
-As in the regression case, we use `gbm` alone and also its implementation in `caret` for classification of our `purchase` outcome variable. The most important variables from the `gbm` model (without `caret`) are `loyal_ch`, and then in distant 2nd and 3rd places, `price_diff` followed by `week_of_purchase`. Similarly, the implementation in `caret` produces...[TKTK].
+As in the regression case, we use `gbm` alone and also its implementation in `caret` with "adaboosting" for classification of our `purchase` outcome variable. The most important variables from the `gbm` model (without `caret`) are `loyal_ch`, and then in distant 2nd and 3rd places, `price_diff` followed by `week_of_purchase`. Similarly, the implementation in `caret` produces...[TKTK].
 
 For simplicity, we focus here on the test error rate from the `caret` model, which we observe to be...[TKTK]. 
 

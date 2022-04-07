@@ -1,0 +1,363 @@
+---
+title: "P8106: Data Science II, Homework #4"
+author: 'Zachary Katz (UNI: zak2132)'
+date: "4/13/2022"
+output: 
+  pdf_document:
+    latex_engine: xelatex
+    toc: yes
+    toc_depth: 3
+  header-includes:
+    -\usepackage{fancyhdr}
+    -\usepackage{lipsum}
+    -\pagestyle{fancy}
+    -\fancyhead[R]{\thepage}
+    -\fancypagestyle{plain}{\pagestyle{fancy}}
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+
+library(tidyverse)
+library(viridis)
+library(caret)
+library(GGally)
+library(gridExtra)
+library(ISLR)
+library(mlbench)
+library(caret)
+library(rpart)
+library(rpart.plot)
+library(party)
+library(partykit)
+library(pROC)
+library(randomForest)
+library(ranger)
+library(gbm)
+
+# Set global options for embedding plots and choosing themes
+knitr::opts_chunk$set(warning = FALSE, message = FALSE, 
+                      fig.align = "center", cache = TRUE, 
+                      fig.width = 6, fig.asp = 0.6, out.width = "90%")
+
+theme_set(theme_minimal() + theme(legend.position = "bottom"))
+
+options(
+  ggplot2.continuous.colour = "viridis",
+  ggplot2.continuous.fill = "viridis"
+)
+
+scale_colour_discrete = scale_colour_viridis_d
+scale_fill_discrete = scale_fill_viridis_d
+```
+
+# Question 1
+
+## Set-Up and Data Preprocessing
+
+```{r}
+set.seed(2132)
+
+# Load data, clean column names, eliminate rows containing NA entries
+data = read_csv("./Data/College.csv") %>% 
+  janitor::clean_names() %>% 
+  na.omit() %>% 
+  relocate("outstate", .after = "grad_rate") %>% 
+  select(-college)
+
+# Partition data into training/test sets
+indexTrain = createDataPartition(y = data$outstate,
+                                 p = 0.8,
+                                 list = FALSE)
+
+training_df = data[indexTrain, ]
+
+testing_df = data[-indexTrain, ]
+```
+
+## Part (a): Regression Tree
+
+Here, we build two regression trees: one based on the cp value that minimizes MSE, and one based on the 1SE rule. Below, we include one visualization of each tree. The tree based on the minimum MSE rule is much more complex than the one based on the 1SE rule, which only has 7 splits (8 terminal nodes). On average, the predictions between both models when applied to test data are quite close, differing by no more than a few percent.
+
+### Minimum MSE Rule
+
+```{r}
+# Build a regression tree on the training data to predict the response
+set.seed(2132)
+
+regression_tree = rpart(formula = outstate ~ . , 
+               data = training_df, control = rpart.control(cp = 0)) 
+
+# Cross-validation plot
+regression_cptable = regression_tree$cptable
+plotcp(regression_tree)
+
+# Cost-complexity pruning
+minimum_MSE = which.min(regression_cptable[,4])
+final_regression_tree = prune(regression_tree, 
+                              cp = regression_cptable[minimum_MSE,1])
+
+# Summary of final tree
+# summary(final_regression_tree) 
+```
+
+```{r}
+# Plot of final tree
+# plot(as.party(final_regression_tree))
+rpart.plot(final_regression_tree) 
+```
+
+### 1SE Rule
+
+```{r}
+# Alternatively, cost-complexity pruning using 1SE rule
+final_regression_tree_1SE = prune(regression_tree, 
+    cp = regression_cptable[regression_cptable[,4]<regression_cptable[minimum_MSE,4]
+                            +regression_cptable[minimum_MSE,5],1][1])
+```
+
+```{r}
+# Plot of 1SE tree
+# plot(as.party(final_regression_tree_1SE))
+rpart.plot(final_regression_tree_1SE)
+```
+
+### Comparison of Predictions
+
+```{r}
+# For fun, compare predictions on first few observations in testing data set
+reg_predict = predict(final_regression_tree, newdata = testing_df)
+oneSE_predict = predict(final_regression_tree_1SE, newdata = testing_df)
+
+# Compare predictions in data table
+cbind(reg_predict, oneSE_predict) %>% 
+  as.data.frame() %>% 
+  head() %>% 
+  mutate(
+    perc_diff = abs((reg_predict - oneSE_predict) * 100 / oneSE_predict)
+  ) %>% 
+  knitr::kable(col.names = c("Prediction: Min MSE", "Prediction: 1SE", "Perc Diff"))
+```
+
+## Part (b): Random Forest
+
+We then use random forest modeling on the training data to predict `outstate` using `caret` in conjunction with `ranger`. Using the importance method, our most important variables are `expend`, `room_board`, and `apps`, whereas with the impurity method, our most important variables are `expend`, `room_board`, and `terminal`. When we apply the model to make predictions on our testing data, our RMSE is 1992.244.
+
+```{r}
+# Train caret random forest model
+
+set.seed(2132)
+
+# Grid of tuning parameters
+rf_grid = expand.grid(mtry = seq(1, 16, 3),
+                      splitrule = "variance",
+                      min.node.size = 1:10)
+
+# 10-fold cross-validation repeated 5 times
+ctrl = trainControl(method = "repeatedcv", number = 10, repeats = 5)
+
+# Find best-fitting model after model fitting to optimize computational efficiency
+rf_college_fit = train(outstate ~ .,
+                       data = training_df,
+                       method = "ranger",
+                       tuneGrid = rf_grid,
+                       trControl = ctrl)
+```
+
+```{r}
+# Obtain variable importance using permutation method
+set.seed(2132)
+permutation_var_imp_rf = ranger(outstate ~ . , 
+                        data = training_df,
+                        mtry = rf_college_fit$bestTune[[1]],
+                        splitrule = "variance",
+                        min.node.size = rf_college_fit$bestTune[[3]],
+                        importance = "permutation",
+                        scale.permutation.importance = TRUE)
+
+# Report variable importance
+barplot(sort(ranger::importance(permutation_var_imp_rf), decreasing = FALSE), 
+        las = 2, horiz = TRUE, cex.names = 0.7, 
+        col = colorRampPalette(colors = c("cyan", "blue"))(19))
+```
+
+```{r}
+# Obtain variable importance using impurity method
+set.seed(2132)
+impurity_var_imp_rf = ranger(outstate ~ . , 
+                        data = training_df,
+                        mtry = rf_college_fit$bestTune[[1]],
+                        splitrule = "variance",
+                        min.node.size = rf_college_fit$bestTune[[3]],
+                        importance = "impurity",
+                        scale.permutation.importance = TRUE)
+
+# Report variable importance
+barplot(sort(ranger::importance(impurity_var_imp_rf), decreasing = FALSE), 
+        las = 2, horiz = TRUE, cex.names = 0.7, 
+        col = colorRampPalette(colors = c("cyan", "blue"))(19))
+```
+
+```{r}
+# Report test error for caret
+rf_college_preds_caret = predict(rf_college_fit, newdata = testing_df)
+RMSE(rf_college_preds_caret, testing_df$outstate)
+```
+
+## Part (c): Boosting
+
+We train our model using gradient boosting as implemented with `gbm` in `caret`. After finding our optimal tuning parameters, we determine that our most important variables are once again `expend`, `room_board`, and `apps`, as we saw with random forest as well. When we apply the optimal model to the testing data, we obtain an RMSE of 1917.113, which is better performance than the random forest model.
+
+```{r}
+# Train model using gbm in caret with grid of tuning parameters
+set.seed(2132)
+
+boost_grid = expand.grid(n.trees = seq(1, 5500, 500),
+                         interaction.depth = 1:5,
+                         shrinkage = c(0.001, 0.003, 0.005),
+                         n.minobsinnode = 1)
+
+college_boost_caret = train(outstate ~ .,
+                            data = training_df,
+                            method = "gbm",
+                            tuneGrid = boost_grid,
+                            trControl = ctrl,
+                            verbose = FALSE)
+```
+
+```{r}
+# Report the variable importance
+summary(college_boost_caret$finalModel, las = 2, cBars = 19, cex.names = 0.6)
+```
+
+```{r}
+# Report the test error
+boost_college_preds = predict(college_boost_caret, newdata = testing_df)
+RMSE(boost_college_preds, testing_df$outstate)
+```
+
+# Question 2
+
+## Set-Up and Data Preprocessing
+
+```{r}
+set.seed(2132)
+
+# Load data, clean column names, eliminate rows containing NA entries, factor outcome
+data(OJ)
+OJ_data = OJ %>% 
+  janitor::clean_names() %>% 
+  na.omit() %>% 
+  relocate("purchase", .after = "store") %>% 
+  mutate(
+    purchase = as.factor(purchase)
+  )
+
+# Partition data into training/test sets (700 obs in training data)
+OJ_indexTrain = createDataPartition(y = OJ_data$purchase,
+                                 p = 0.653,
+                                 list = FALSE)
+
+OJ_training_df = OJ_data[OJ_indexTrain, ]
+
+OJ_testing_df = OJ_data[-OJ_indexTrain, ]
+```
+
+## Part (a): Classification Tree
+
+Using `rpart`, we can build a classification tree on the OJ training data to predict `purchase` class. As with the regression tree, we can do so using either the model that minimizes cross-validation error or based on the 1SE rule; here, we do both for completeness. 
+
+### Minimum MSE Rule
+
+The tree that minimizes cross-validation error has 8 splits, leading to 9 terminal nodes (i.e. size 9). 
+
+```{r}
+# Build classification tree using training data
+set.seed(2132)
+
+class_tree = rpart(formula = purchase ~ . , 
+               data = OJ_training_df,
+               control = rpart.control(cp = 0))
+
+# Obtain cp table and plot vs cross-validation error
+OJ_cp_table = printcp(class_tree)
+plotcp(class_tree)
+```
+
+The final tree appears as follows: 
+
+```{r}
+# Obtain and plot final tree using min MSE rule
+OJ_min_MSE = which.min(OJ_cp_table[,4])
+final_class_tree = prune(class_tree, cp = OJ_cp_table[OJ_min_MSE,1])
+rpart.plot(final_class_tree)
+# plot(as.party(final_class_tree))
+```
+
+### 1SE Rule
+
+Based on the 1SE rule, the final tree has only one split, which is based on the `loyal_ch` predictor, and two terminal nodes (size 2). This is quite a bit simpler and smaller than the tree that minimized cross-validation error, but is also significantly easier to interpret.
+
+```{r}
+# Obtain and plot final tree using 1SE rule
+final_class_tree_1SE = prune(class_tree, 
+      cp = OJ_cp_table[OJ_cp_table[,4]<OJ_cp_table[OJ_min_MSE,4]+OJ_cp_table[OJ_min_MSE,5],1][1])
+
+# Plot of 1SE tree
+rpart.plot(final_class_tree_1SE)
+# plot(as.party(final_class_tree_1SE))
+```
+
+## Part (b): Boosting
+
+As in the regression case, we use `gbm`'s implementation in `caret`, except with "adaboosting" for classification of our `purchase` outcome variable. We find that our most important variable is `loyal_ch` by quite a bit, followed by `price_diff`, and then by `store_id`. When applied to our test data, the model gives an 18.9% error rate.
+
+```{r}
+set.seed(2132)
+
+# Fit optimal adaboost model for classification using training data
+boost_grid_OJ = expand.grid(n.trees = seq(1, 5000, 500),
+                         interaction.depth = 1:6,
+                         shrinkage = c(0.001, 0.003, 0.005),
+                         n.minobsinnode = 1)
+
+ctrl_class = trainControl(method = "repeatedcv", number = 10, repeats = 5,
+                          classProbs = TRUE,
+                          summaryFunction = twoClassSummary)
+
+OJ_boost_caret = train(purchase ~ .,
+                        data = OJ_training_df,
+                        method = "gbm",
+                        tuneGrid = boost_grid_OJ,
+                        trControl = ctrl_class,
+                        distribution = "adaboost",
+                        metric = "ROC",
+                        verbose = FALSE)
+```
+
+```{r}
+# Variable importance
+# Method 2
+summary(OJ_boost_caret$finalModel, las = 2, cBars = 19, cex.names = 0.6)
+```
+
+```{r}
+# Test error rate
+# Method 2 only for now
+boost_OJ_preds = predict(OJ_boost_caret, newdata = OJ_testing_df)
+error_rate = mean(boost_OJ_preds != OJ_testing_df$purchase)*100
+error_rate
+```
+
+Just for fun, we can visualize the ROC and confusion matrix as well.
+
+```{r}
+boost_preds_prob = predict(OJ_boost_caret, newdata = OJ_testing_df, type = "prob")[, 1]
+boost_roc_curve = roc(OJ_testing_df$purchase, boost_preds_prob)
+plot(boost_roc_curve, legacy.axes = TRUE, print.auc = TRUE)
+```
+
+```{r}
+confusionMatrix(boost_OJ_preds, OJ_testing_df$purchase)
+```
+
